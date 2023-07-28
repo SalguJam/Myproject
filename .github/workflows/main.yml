@@ -1,3 +1,4 @@
+# 지속적 통합(CI)를 위한 작업
 # GitHub Actions에서 수행될 동작 작성
 
 name: Java CI with Gradle  # 작업에 대한 이름임
@@ -30,3 +31,37 @@ jobs:
           docker build -t spring-cicd . 
           docker tag spring-cicd salgujam/spring-cicd:${GITHUB_SHA::7}
           docker push salgujam/spring-cicd:${GITHUB_SHA::7}
+
+
+
+      # 지속적 배포(CD)를 위한 작업
+      # 위에서 CI(지속적 통합) 작업을 성공적으로 마친 후, 아래 코드에 따라, 각 단계에 작성된 내용대로 Push 된 도커 이미지를 배포 대상 서버에 Pull하고,
+      # 알맞게 컨테이너를 생성한 뒤 새로 만든 컨테이너를 실행한다.
+
+      - name: Configure AWS credentials #AWS의 액세스 키와 비밀 액세스 키의 정보를 가지고 AWS에 인증
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+      - name: Start Session Manager session
+        run: aws ssm start-session --target i-07061b97cfcb73c4a #AWS 세션매니저를 이용해 EC2에 연결
+      - name: Deploy to Server
+        env:
+          # AWS_Access_Key와 AWS_Secret_Access_Key는 공개 저장소에 업로드되면 안되는 값. AWS 계정이 해킹될 수 있음.
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ap-northeast-2
+        run: |
+          aws ssm send-command \
+            --instance-ids i-07061b97cfcb73c4a \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[
+              'if sudo docker ps -a --format \\'{{.Names}}\\' | grep -q \'^server$\\'; then',
+              '  sudo docker stop server',
+              '  sudo docker rm server',
+              'fi',
+              'sudo docker pull salgujam/spring-cicd:${GITHUB_SHA::7}',
+              'sudo docker tag salgujam/spring-cicd:${GITHUB_SHA::7} spring-cicd',
+              'sudo docker run -d --name server -p 8080:8080 spring-cicd'
+            ]" \
+            --output text
